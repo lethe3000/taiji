@@ -1,0 +1,63 @@
+package backend
+
+import (
+        "fmt"
+        "time"
+        "golang.org/x/net/context"
+        ec "github.com/coreos/etcd/client"
+)
+
+var (
+        ONLINE = 1
+        OFFLINE = 0
+)
+
+
+type Client struct {
+        Id string
+        Status int // online, offline
+}
+
+//type ClientManage interface {
+//        Register() error
+        //Deregister() error
+        //List() []TaijiClient
+//}
+
+// Alerts gives access to a set of alerts. All methods are goroutine-safe.
+type PushMessage struct {
+        Client  Client
+        Payload string
+}
+
+type Sender interface {
+        Put(PushMessage) error
+        Fetch() (PushMessage, error)
+        Send(PushMessage) error
+}
+
+func (client *Client) Register() error {
+        cfg := ec.Config{
+        Endpoints:               []string{"http://10.10.10.10:2379"},
+        Transport:               ec.DefaultTransport,
+        // set timeout per request to fail fast when the target endpoint is unavailable
+        HeaderTimeoutPerRequest: time.Second,
+            }
+        c, _ := ec.New(cfg)
+        kapi := ec.NewKeysAPI(c)
+        // set "/foo" key with "bar" value
+        //fmt.Print("Setting '/foo' key with 'bar' value")
+        _, err := kapi.Create(context.Background(), "/client/" + client.Id, "")
+        client.Status = ONLINE
+        //_, err := kapi.Set(context.Background(), "/client/" + cl.id, cl.status, nil)
+        return err
+}
+
+func (cl *Client) Deregister() error {
+        fmt.Print(cl.Id)
+        return nil
+}
+
+//func (cl *Client) List() []Client {
+//        return nil
+//}

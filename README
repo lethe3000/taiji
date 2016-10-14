@@ -1,0 +1,4 @@
+Simpile Push Server
+===
+
+Use etcd backend for message and client persistence

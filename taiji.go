@@ -9,12 +9,14 @@ import (
     "strings"
     "syscall"
     "text/scanner"
+    "github.com/lethe3000/taiji/backend/etcd"
 )
 
 // Server events
 const (
     REGISTER = iota
     UNREGISTER
+    DISCONNECT
     LIST_ALL
     BROADCAST
     SEND_TO
@@ -44,10 +46,15 @@ type Server struct {
     masterChan chan *Event
     clientListener net.Listener
     controlListener net.Listener
+    backend etcd.Backend
 }
 
 func NewServer(clientPort, controlPort int) (*Server) {
-   return &Server{ clientPort, controlPort, make(map[string] chan *Event), make(chan *Event, 32), nil, nil }
+    return &Server{
+        clientPort, controlPort,
+        make(map[string] chan *Event),
+        make(chan *Event, 32), nil, nil,
+        &etcd.EtcdBackend{Urls: []string{"http://localhost:2379"}}}
 }
 
 func (m *Server) handleConnection(conn net.Conn) {
@@ -75,6 +82,14 @@ func (m *Server) handleConnection(conn net.Conn) {
     clientId := strings.TrimSpace(words[1])
     clientChan := make(chan *Event, 10)
     m.masterChan <- &Event{REGISTER, clientId, clientChan}
+    if m.backend.CheckClient(clientId) {
+        for _, msg := range m.backend.Fetch(clientId) {
+            log.Printf("Send message to back client[%s]: %s", clientId, msg)
+            if !m.SendText(clientId, msg) {
+                m.backend.Store(clientId, msg)
+            }
+        }
+    }
 
     go func() {
         for {
@@ -83,12 +98,19 @@ func (m *Server) handleConnection(conn net.Conn) {
                 if err != io.EOF {
                     log.Printf("Error reading: %s", err.Error())
                 }
+                log.Printf("DISCONNECT")
                 clientChan <- &Event{CLOSE_CLIENT, 0, 0}
-                m.masterChan <- &Event{UNREGISTER, clientId, 0}
+                m.masterChan <- &Event{DISCONNECT, clientId, 0}
                 break
             } else {
                 writer.WriteString(s)
                 writer.Flush()
+                if strings.TrimSpace(s) == "QUIT" {
+                    log.Printf("QUIT")
+                    clientChan <- &Event{CLOSE_CLIENT, 0, 0}
+                    m.masterChan <- &Event{UNREGISTER, clientId, 0}
+                    break
+                }
             }
         }
     } ()
@@ -98,7 +120,9 @@ func (m *Server) handleConnection(conn net.Conn) {
         case BROADCAST:
             writer.WriteString("BROADCAST " + event.data1.(string) + "\n")
             writer.Flush()
-
+        case SEND_TO:
+            writer.WriteString("SEND_TO " + event.data1.(string) + "\n")
+            writer.Flush()
         case CLOSE_CLIENT:
             return
         }
@@ -156,7 +180,7 @@ func (m *Server) handleControlConnection(conn net.Conn) {
                 }
                 if m.SendText(clientId, s.TokenText()) {
                     writer.WriteString("Message sent.\n")
-                } else {
+                } else if !m.backend.CheckClient(clientId) {
                     writer.WriteString("Can't find " + clientId + "\n")
                 }
 
@@ -200,17 +224,33 @@ func (m *Server) ListenAndServe() {
     go m.startControlListener()
     go m.startClientListener()
 
+    m.backend.Init()
+
     for event := range m.masterChan {
         switch event.eventType {
         case REGISTER:
             clientId := event.data1.(string)
-            log.Printf("Registering new client %s", clientId)
+            log.Printf("Registering client %s", clientId)
             m.clients[clientId] = event.data2.(chan *Event)
+            if m.backend.Register(clientId) != nil {
+                log.Printf("Register error %s", clientId)
+            }
 
         case UNREGISTER:
             clientId := event.data1.(string)
             log.Printf("Unregistering client %s", clientId)
             delete(m.clients, clientId)
+            if m.backend.Deregister(clientId) != nil {
+                log.Printf("Deregister error %s", clientId)
+            }
+
+        case DISCONNECT:
+            clientId := event.data1.(string)
+            log.Printf("Disconnect client %s", clientId)
+            delete(m.clients, clientId)
+            if m.backend.Disconnect(clientId) != nil {
+                log.Printf("Disconnect error %s", clientId)
+            }
 
         case LIST_ALL:
             log.Println("Listing all clients")
@@ -235,7 +275,9 @@ func (m *Server) ListenAndServe() {
             if ok {
                 log.Println("Send message to " + clientId)
                 // FIXME: may block!
-                clientChan <- &Event{BROADCAST, event.data1.(*SendText).text, 0}
+                clientChan <- &Event{SEND_TO, event.data1.(*SendText).text, 0}
+            } else {
+                m.backend.Store(clientId, event.data1.(*SendText).text)
             }
             event.data2.(chan bool) <- ok
 
