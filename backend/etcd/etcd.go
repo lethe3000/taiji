@@ -124,5 +124,5 @@ func (w *EtcdBackend) Fetch(cid string) []string {
 }
 
 func timeout(seconds int64) (context.Context, context.CancelFunc){
-        return context.WithTimeout(context.Background(), seconds * time.Second)
+        return context.WithTimeout(context.Background(), time.Duration(seconds) * time.Second)
 }
