@@ -123,6 +123,6 @@ func (w *EtcdBackend) Fetch(cid string) []string {
         return msgs
 }
 
-func timeout(seconds int) (context.Context, context.CancelFunc){
+func timeout(seconds int64) (context.Context, context.CancelFunc){
         return context.WithTimeout(context.Background(), seconds * time.Second)
 }
